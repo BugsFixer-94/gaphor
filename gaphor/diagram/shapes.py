@@ -15,7 +15,6 @@ from gaphor.diagram.text import (
     TextDecoration,
     VerticalAlign,
     text_draw,
-    text_draw_focus_box,
     text_point_in_box,
     text_size,
 )
@@ -38,6 +37,7 @@ Style = TypedDict(
         "font-weight": Optional[FontWeight],
         "text-decoration": Optional[TextDecoration],
         "text-align": TextAlign,
+        "text-color": Optional[Tuple[float, float, float, float]],  # RGBA
         "stroke": Optional[Tuple[float, float, float, float]],  # RGBA
         "vertical-align": VerticalAlign,
         "line-width": float,
@@ -74,6 +74,7 @@ DEFAULT_STYLE: Style = {
     "font-weight": None,
     "text-decoration": None,
     "text-align": TextAlign.CENTER,
+    "text-color": None,
 }
 
 
@@ -99,6 +100,18 @@ class DrawContext:
     style: Style
 
 
+class cairo_state:
+    def __init__(self, cr):
+        self._cr = cr
+
+    def __enter__(self):
+        self._cr.save()
+        return self._cr
+
+    def __exit__(self, _type, _value, _traceback):
+        self._cr.restore()
+
+
 def draw_border(box, context: DrawContext, bounding_box: Rectangle):
     cr = context.cairo
     d = context.style["border-radius"]
@@ -122,12 +135,9 @@ def draw_border(box, context: DrawContext, bounding_box: Rectangle):
 
     fill = context.style["fill"]
     if fill:
-        cr.save()
-        try:
+        with cairo_state(cr):
             cr.set_source_rgba(*fill)
             cr.fill_preserve()
-        finally:
-            cr.restore()
     draw_highlight(context)
 
     stroke = context.style["stroke"]
@@ -152,14 +162,10 @@ def draw_highlight(context: DrawContext, highlight_color=(0, 0, 1, 0.4)):
     if not context.dropzone:
         return
     highlight_color = (0, 0, 1, 0.4)
-    cr = context.cairo
-    cr.save()
-    try:
+    with cairo_state(context.cairo) as cr:
         cr.set_source_rgba(*highlight_color)
         cr.set_line_width(cr.get_line_width() * 3.141)
         cr.stroke_preserve()
-    finally:
-        cr.restore()
 
 
 def combined_style(
@@ -336,16 +342,21 @@ class Text:
             bounding_box.height - padding[Padding.TOP] - padding[Padding.BOTTOM],
         )
 
-        x, y, w, h = text_draw(
-            context.cairo,
-            self.text(),
-            style,
-            lambda w, h: text_point_in_box(
-                text_box, (w, h), text_align, vertical_align
-            ),
-            width=text_box.width,
-            default_size=(min_w, min_h),
-        )
+        with cairo_state(context.cairo) as cr:
+            text_color = style["text-color"]
+            if text_color:
+                cr.set_source_rgba(*text_color)
+
+            x, y, w, h = text_draw(
+                cr,
+                self.text(),
+                style,
+                lambda w, h: text_point_in_box(
+                    text_box, (w, h), text_align, vertical_align
+                ),
+                width=text_box.width,
+                default_size=(min_w, min_h),
+            )
         return x, y, w, h
 
 
@@ -391,3 +402,17 @@ def draw_arrow_tail(context: DrawContext):
     cr.move_to(15, -6)
     cr.line_to(0, 0)
     cr.line_to(15, 6)
+
+
+def text_draw_focus_box(context, x, y, w, h):
+    if context.hovered or context.focused:
+        with cairo_state(context.cairo) as cr:
+            # cr.set_dash(() if context.focused else (2.0, 2.0), 0)
+            cr.set_dash((), 0)
+            if context.focused:
+                cr.set_source_rgb(0.6, 0.6, 0.6)
+            else:
+                cr.set_source_rgb(0.8, 0.8, 0.8)
+            cr.set_line_width(0.5)
+            cr.rectangle(x, y, w, h)
+            cr.stroke()
